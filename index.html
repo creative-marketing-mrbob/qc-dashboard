@@ -1819,15 +1819,7 @@ async function loadData() {
       throw new Error('APPS_SCRIPT_URL belum diisi. Deploy Apps Script Web App lalu paste URL /exec di variabel APPS_SCRIPT_URL.');
     }
 
-    const apiUrl = new URL(APPS_SCRIPT_URL);
-    apiUrl.searchParams.set('from', from);
-    apiUrl.searchParams.set('to', to);
-    apiUrl.searchParams.set('_', Date.now().toString());
-
-    const res = await fetch(apiUrl.toString(), { method: 'GET', cache: 'no-store' });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-
-    const payload = await res.json();
+    const payload = await loadApiPayload(from, to);
     if (payload.status !== 'ok') throw new Error(payload.message || 'Response API tidak valid');
 
     allMemberData = normalizeApiData(payload.data || {});
@@ -1841,6 +1833,59 @@ async function loadData() {
     console.error('Gagal memuat data QC:', err);
     useFallbackData(from, to, err.message);
   }
+}
+
+async function loadApiPayload(from, to) {
+  const apiUrl = new URL(APPS_SCRIPT_URL);
+  apiUrl.searchParams.set('from', from);
+  apiUrl.searchParams.set('to', to);
+  apiUrl.searchParams.set('_', Date.now().toString());
+
+  try {
+    const res = await fetch(apiUrl.toString(), { method: 'GET', cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return await res.json();
+  } catch (err) {
+    console.warn('Fetch API gagal, mencoba JSONP fallback:', err);
+    return loadApiPayloadJsonp(from, to);
+  }
+}
+
+function loadApiPayloadJsonp(from, to) {
+  return new Promise((resolve, reject) => {
+    const callbackName = 'qcDashboardCallback_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+    const apiUrl = new URL(APPS_SCRIPT_URL);
+    apiUrl.searchParams.set('from', from);
+    apiUrl.searchParams.set('to', to);
+    apiUrl.searchParams.set('callback', callbackName);
+    apiUrl.searchParams.set('_', Date.now().toString());
+
+    const script = document.createElement('script');
+    const cleanup = () => {
+      delete window[callbackName];
+      script.remove();
+    };
+
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('JSONP timeout'));
+    }, 15000);
+
+    window[callbackName] = payload => {
+      clearTimeout(timeout);
+      cleanup();
+      resolve(payload);
+    };
+
+    script.onerror = () => {
+      clearTimeout(timeout);
+      cleanup();
+      reject(new Error('JSONP load failed'));
+    };
+
+    script.src = apiUrl.toString();
+    document.head.appendChild(script);
+  });
 }
 
 function normalizeApiData(apiData) {
