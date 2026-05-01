@@ -28,19 +28,16 @@ const MEMBER_TABS = {
   'Ilham':  'Ilham',
 };
 
+const MEMBER_TAB_ALIASES = {
+  'Alin': ['Alin', 'LINDA MONICA HADI KUSUMA', 'Linda Monica Hadi Kusuma', 'Linda Monica', 'Linda', 'ALIN'],
+};
+
 // ================================================================
 // KOLOM YANG ADA DI SETIAP TAB (SESUAI STRUKTUR SPREADSHEET)
 // ================================================================
-// Berdasarkan screenshot:
-// Col A=No, B=Tanggal, C=Link Content, D=Format Content,
-// E=Jenis Revisi (dropdown: No Revisi / Revisi Minor / Revisi Major / Request)
-// F=Total revisi, G onwards = checkbox bagian revisi (Hook, Font, Warna, dst)
+// Script mencari kolom berdasarkan header, jadi aman walaupun ada kolom
+// tambahan seperti Kategori sebelum Link Content.
 // Last col = Dealdone (checkbox)
-
-const COL_TANGGAL     = 1;  // B (index 1, 0-based)
-const COL_JENIS_REVISI = 4; // E (index 4, 0-based)
-const COL_TOTAL_REVISI = 5; // F (index 5, 0-based)
-// Kolom checkbox revisi mulai dari index 6 (G) sampai sebelum Keterangan/Dealdone
 
 // ================================================================
 // MAIN HANDLER
@@ -72,7 +69,7 @@ function getAllMembersData(dateFrom, dateTo) {
   
   for (const [memberName, tabName] of Object.entries(MEMBER_TABS)) {
     try {
-      const sheet = ss.getSheetByName(tabName);
+      const sheet = findMemberSheet(ss, memberName, tabName);
       if (!sheet) {
         result[memberName] = emptyMember();
         continue;
@@ -96,9 +93,13 @@ function parseMemberSheet(sheet, memberName, dateFrom, dateTo) {
   
   if (lastRow < 6 || lastCol < 5) return emptyMember();
   
-  // Baca semua data mulai baris 6 (row index 6, setelah header)
-  // Header ada di baris 4-5 biasanya
-  const startRow = 6;
+  const headerRowIndex = findHeaderRow(sheet, lastCol);
+  const headerRow = sheet.getRange(headerRowIndex, 1, 1, lastCol).getValues()[0];
+  const columns = getColumnMap(headerRow);
+  if (columns.tanggal < 0 || columns.jenisRevisi < 0) return emptyMember();
+
+  // Baca semua data mulai setelah header.
+  const startRow = headerRowIndex + 1;
   const numRows  = lastRow - startRow + 1;
   
   if (numRows <= 0) return emptyMember();
@@ -119,22 +120,9 @@ function parseMemberSheet(sheet, memberName, dateFrom, dateTo) {
   // Key = nama kolom, value = count berapa kali dicentang
   const issueCounts = {};
   
-  // Ambil header nama kolom dari baris 5 (index 4 di sheet = baris ke-5)
-  const headerRow = sheet.getRange(5, 1, 1, lastCol).getValues()[0];
-  
-  // Kolom revisi checkbox: dari kolom G (index 6) sampai sebelum Keterangan
-  // Cari kolom "Keterangan" dan "Dealdone"
-  let keteranganColIdx = -1;
-  let dealdoneColIdx   = -1;
-  for (let c = 0; c < headerRow.length; c++) {
-    const h = String(headerRow[c]).toLowerCase().trim();
-    if (h === 'keterangan') keteranganColIdx = c;
-    if (h === 'dealdone')   dealdoneColIdx   = c;
-  }
-  
-  // Kolom checkbox revisi: dari index 6 sampai keteranganColIdx-1 (atau dealdoneColIdx-1)
-  const checkboxEndCol = keteranganColIdx > 0 ? keteranganColIdx : (dealdoneColIdx > 0 ? dealdoneColIdx : lastCol - 1);
-  const checkboxStartCol = 6; // G
+  // Kolom revisi checkbox: setelah Total revisi sampai sebelum Keterangan/Dealdone.
+  const checkboxEndCol = columns.keterangan > 0 ? columns.keterangan : (columns.dealdone > 0 ? columns.dealdone : lastCol);
+  const checkboxStartCol = columns.totalRevisi >= 0 ? columns.totalRevisi + 1 : columns.jenisRevisi + 1;
   
   // Nama kolom checkbox
   const checkboxColNames = [];
@@ -145,8 +133,8 @@ function parseMemberSheet(sheet, memberName, dateFrom, dateTo) {
   
   for (const row of values) {
     // Skip baris kosong
-    const tanggal    = row[COL_TANGGAL];
-    const jenisRevisi = String(row[COL_JENIS_REVISI] || '').trim();
+    const tanggal    = row[columns.tanggal];
+    const jenisRevisi = String(row[columns.jenisRevisi] || '').trim();
     
     // Cek apakah baris ini ada isinya (ada tanggal atau jenis revisi)
     if (!tanggal && !jenisRevisi) continue;
@@ -196,6 +184,46 @@ function parseMemberSheet(sheet, memberName, dateFrom, dateTo) {
   issues.sort((a, b) => b.count - a.count);
   
   return { projects, noRevisi, minor, major, issues };
+}
+
+function findMemberSheet(ss, memberName, defaultTabName) {
+  const candidates = [defaultTabName].concat(MEMBER_TAB_ALIASES[memberName] || []);
+  const seen = {};
+  for (const candidate of candidates) {
+    const tabName = String(candidate || '').trim();
+    if (!tabName || seen[tabName]) continue;
+    seen[tabName] = true;
+    const sheet = ss.getSheetByName(tabName);
+    if (sheet) return sheet;
+  }
+  return null;
+}
+
+function findHeaderRow(sheet, lastCol) {
+  const maxRows = Math.min(sheet.getLastRow(), 10);
+  const rows = sheet.getRange(1, 1, maxRows, lastCol).getValues();
+  for (let r = 0; r < rows.length; r++) {
+    const normalized = rows[r].map(normalizeHeader);
+    if (normalized.indexOf('tanggal') >= 0 && normalized.indexOf('jenis revisi') >= 0) {
+      return r + 1;
+    }
+  }
+  return 5;
+}
+
+function getColumnMap(headerRow) {
+  const normalized = headerRow.map(normalizeHeader);
+  return {
+    tanggal: normalized.indexOf('tanggal'),
+    jenisRevisi: normalized.indexOf('jenis revisi'),
+    totalRevisi: normalized.indexOf('total revisi'),
+    keterangan: normalized.indexOf('keterangan'),
+    dealdone: normalized.indexOf('dealdone'),
+  };
+}
+
+function normalizeHeader(value) {
+  return String(value || '').toLowerCase().trim().replace(/\s+/g, ' ');
 }
 
 // ================================================================

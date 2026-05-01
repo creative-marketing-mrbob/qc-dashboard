@@ -1762,6 +1762,9 @@ const MEMBER_PHOTOS = {
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwAIyAtZjUyteRlKTInuxN2ye6xsuyS-ovjtorBlvU-YnJptZ6ALUUEHkwH2UGJbGrOdw/exec';
 
 const MEMBERS = ['Sulton','Dewi','Zakki','Alin','Cindy','Sonia','Ilham'];
+const MEMBER_ALIASES = {
+  'Alin': ['Alin', 'LINDA MONICA HADI KUSUMA', 'Linda Monica Hadi Kusuma', 'Linda Monica', 'Linda'],
+};
 const AVATAR_COLORS = ['#FF1203','#1A6FA8','#13C4E9','#8D4FBC','#F60867','#59BEBA','#f59e0b'];
 
 let allMemberData = {};
@@ -1843,7 +1846,7 @@ async function loadData() {
 function normalizeApiData(apiData) {
   const normalized = {};
   MEMBERS.forEach(member => {
-    const item = apiData[member] || {};
+    const item = findApiMemberData(apiData, member);
     normalized[member] = {
       projects: Number(item.projects) || 0,
       noRevisi: Number(item.noRevisi) || 0,
@@ -1859,6 +1862,25 @@ function normalizeApiData(apiData) {
     };
   });
   return normalized;
+}
+
+function findApiMemberData(apiData, member) {
+  const aliases = MEMBER_ALIASES[member] || [member];
+  for (const alias of aliases) {
+    if (apiData[alias]) return apiData[alias];
+  }
+
+  const lowerMap = {};
+  Object.keys(apiData || {}).forEach(key => {
+    lowerMap[String(key).trim().toLowerCase()] = apiData[key];
+  });
+
+  for (const alias of aliases) {
+    const item = lowerMap[String(alias).trim().toLowerCase()];
+    if (item) return item;
+  }
+
+  return {};
 }
 
 function applyFilter() {
