@@ -2803,13 +2803,38 @@ function normalizeApiData(apiData) {
   const normalized = {};
   MEMBERS.forEach(member => {
     const item = findApiMemberData(apiData, member);
+    const entries = Array.isArray(item.entries)
+      ? item.entries.map(entry => {
+          const date = String(entry.date || '');
+          const projectName = String(entry.projectName || '');
+          const jenisRevisi = String(entry.jenisRevisi || '');
+          let type = String(entry.type || getEntryType(jenisRevisi));
+          if (type === 'other' && date && projectName) type = 'noRevisi';
+          return {
+            date,
+            projectName,
+            jenisRevisi,
+            type,
+            revisionCount: Number(entry.revisionCount) || 0,
+            issues: Array.isArray(entry.issues) ? entry.issues.map(issue => String(issue || '')).filter(Boolean) : [],
+          };
+        }).filter(entry => entry.date && isCountedProjectType(entry.type))
+      : [];
+    const hasEntries = entries.length > 0;
+    const noRevisi = hasEntries ? entries.filter(entry => entry.type === 'noRevisi').length : Number(item.noRevisi) || 0;
+    const minor = hasEntries ? entries.filter(entry => entry.type === 'minor').length : Number(item.minor) || 0;
+    const major = hasEntries ? entries.filter(entry => entry.type === 'major').length : Number(item.major) || 0;
+    const projects = hasEntries ? entries.length : Number(item.projects) || 0;
+    const totalRevisionCount = hasEntries
+      ? entries.reduce((sum, entry) => sum + (Number(entry.revisionCount) || 0), 0)
+      : Number(item.totalRevisionCount) || 0;
     normalized[member] = {
-      projects: Number(item.projects) || 0,
-      noRevisi: Number(item.noRevisi) || 0,
-      minor: Number(item.minor) || 0,
-      major: Number(item.major) || 0,
-      totalRevisionCount: Number(item.totalRevisionCount) || 0,
-      avgRevisionCount: Number(item.avgRevisionCount) || 0,
+      projects,
+      noRevisi,
+      minor,
+      major,
+      totalRevisionCount,
+      avgRevisionCount: projects > 0 ? Math.round((totalRevisionCount / projects) * 10) / 10 : 0,
       issues: Array.isArray(item.issues)
         ? item.issues.map(issue => ({
             name: String(issue.name || ''),
@@ -2817,19 +2842,14 @@ function normalizeApiData(apiData) {
             pct: Number(issue.pct) || 0,
           })).filter(issue => issue.name && issue.count > 0)
         : [],
-      entries: Array.isArray(item.entries)
-        ? item.entries.map(entry => ({
-            date: String(entry.date || ''),
-            projectName: String(entry.projectName || ''),
-            jenisRevisi: String(entry.jenisRevisi || ''),
-            type: String(entry.type || getEntryType(entry.jenisRevisi)),
-            revisionCount: Number(entry.revisionCount) || 0,
-            issues: Array.isArray(entry.issues) ? entry.issues.map(issue => String(issue || '')).filter(Boolean) : [],
-          })).filter(entry => entry.date && entry.jenisRevisi)
-        : [],
+      entries,
     };
   });
   return normalized;
+}
+
+function isCountedProjectType(type) {
+  return type === 'noRevisi' || type === 'minor' || type === 'major';
 }
 
 function findApiMemberData(apiData, member) {
@@ -2902,12 +2922,16 @@ function useFallbackData(from, to, message = '') {
 // HELPERS
 // ============================================================
 function getRevisionScore(data) {
-  const projects = Number(data?.projects) || 0;
+  const projects = getEvaluatedProjectCount(data);
   if (projects <= 0) return 0;
   const noRevisi = Number(data?.noRevisi) || 0;
   const minor = Number(data?.minor) || 0;
   const rawScore = ((noRevisi * 1) + (minor * 0.5)) / projects * 100;
   return Math.max(0, Math.min(100, Math.round(rawScore)));
+}
+
+function getEvaluatedProjectCount(data) {
+  return (Number(data?.noRevisi) || 0) + (Number(data?.minor) || 0) + (Number(data?.major) || 0);
 }
 
 function getScoreColor(score) {
@@ -2943,7 +2967,9 @@ function getRevisionCountColor(count) {
 }
 
 function getRevisionCountDistribution(data) {
-  const rows = Array.isArray(data?.entries) ? data.entries : [];
+  const rows = Array.isArray(data?.entries)
+    ? data.entries.filter(entry => entry.type !== 'pending')
+    : [];
   const counts = new Map();
 
   rows.forEach(entry => {
@@ -3739,7 +3765,8 @@ function getTopIssue(data) {
 }
 
 function getEvaluation(name, data) {
-  const pct = data.projects > 0 ? (data.noRevisi / data.projects * 100) : 0;
+  const evaluatedProjects = getEvaluatedProjectCount(data);
+  const pct = evaluatedProjects > 0 ? (data.noRevisi / evaluatedProjects * 100) : 0;
   const top = getTopIssue(data);
 
   if (data.projects === 0) return {
@@ -3948,8 +3975,9 @@ function renderOverview() {
     totalMajor    += d.major    || 0;
     totalRevisionCount += d.totalRevisionCount || 0;
   });
-  const avgRate = totalProjects > 0 ? Math.round(totalNoRevisi / totalProjects * 100) : 0;
-  const avgScore = totalProjects > 0 ? Math.round(((totalNoRevisi * 1) + (totalMinor * 0.5)) / totalProjects * 100) : 0;
+  const totalEvaluatedProjects = totalNoRevisi + totalMinor + totalMajor;
+  const avgRate = totalEvaluatedProjects > 0 ? Math.round(totalNoRevisi / totalEvaluatedProjects * 100) : 0;
+  const avgScore = totalEvaluatedProjects > 0 ? Math.round(((totalNoRevisi * 1) + (totalMinor * 0.5)) / totalEvaluatedProjects * 100) : 0;
   const avgRevisionAll = totalProjects > 0 ? Math.round((totalRevisionCount / totalProjects) * 10) / 10 : 0;
 
 
@@ -3973,7 +4001,8 @@ function renderOverview() {
     const status     = getStatus(data);
     const { badge, text } = getStatusLabel(status);
     const topIssue   = getTopIssue(data);
-    const pctNoRevisi = data.projects > 0 ? Math.round(data.noRevisi / data.projects * 100) : 0;
+    const evaluatedProjects = getEvaluatedProjectCount(data);
+    const pctNoRevisi = evaluatedProjects > 0 ? Math.round(data.noRevisi / evaluatedProjects * 100) : 0;
     const scoreRevisi = getRevisionScore(data);
     const scoreColor  = getScoreColor(scoreRevisi);
     const avgRevision = formatRevisionAverage(data.avgRevisionCount);
@@ -4050,7 +4079,8 @@ function showDetail(name, options = {}) {
   const data        = allMemberData[name] || { projects: 0, noRevisi: 0, minor: 0, major: 0, issues: [] };
   const color       = AVATAR_COLORS[MEMBERS.indexOf(name) % AVATAR_COLORS.length];
   const eval_       = getEvaluation(name, data);
-  const pctNoRevisi = data.projects > 0 ? (data.noRevisi / data.projects * 100).toFixed(1) : 0;
+  const evaluatedProjects = getEvaluatedProjectCount(data);
+  const pctNoRevisi = evaluatedProjects > 0 ? (data.noRevisi / evaluatedProjects * 100).toFixed(1) : 0;
   const scoreRevisi = getRevisionScore(data);
   const scoreColor  = getScoreColor(scoreRevisi);
   const maxIssue    = data.issues.length > 0 ? Math.max(...data.issues.map(i => i.count)) : 1;
@@ -4175,7 +4205,7 @@ function showDetail(name, options = {}) {
           <div style="display:flex;flex-direction:column;gap:12px">
             <div style="display:flex;align-items:center;gap:10px">
               <div style="width:14px;height:14px;border-radius:4px;background:#22c55e;flex-shrink:0"></div>
-              <div style="font-size:14px;font-weight:600">No Revisi: <strong>${data.noRevisi}</strong> (${data.projects > 0 ? Math.round(data.noRevisi/data.projects*100) : 0}%)</div>
+              <div style="font-size:14px;font-weight:600">No Revisi: <strong>${data.noRevisi}</strong> (${getEvaluatedProjectCount(data) > 0 ? Math.round(data.noRevisi/getEvaluatedProjectCount(data)*100) : 0}%)</div>
             </div>
             <div style="display:flex;align-items:center;gap:10px">
               <div style="width:14px;height:14px;border-radius:4px;background:#f59e0b;flex-shrink:0"></div>
@@ -4309,7 +4339,8 @@ function downloadCard() {
   const name = currentMember;
   const data = allMemberData[name] || { projects: 0, noRevisi: 0, minor: 0, major: 0, issues: [] };
   const eval_ = getEvaluation(name, data);
-  const pct = data.projects > 0 ? Math.round(data.noRevisi / data.projects * 100) : 0;
+  const evaluatedProjects = getEvaluatedProjectCount(data);
+  const pct = evaluatedProjects > 0 ? Math.round(data.noRevisi / evaluatedProjects * 100) : 0;
   const scoreRevisi = getRevisionScore(data);
   const scoreColor = getScoreColor(scoreRevisi);
   const rankInfo = getMemberRevisionRank(name);
