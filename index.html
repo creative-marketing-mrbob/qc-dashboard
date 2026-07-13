@@ -2051,12 +2051,12 @@
 
   .detail-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(300px, 0.95fr) minmax(260px, 0.85fr) minmax(300px, 1fr);
     gap: 20px;
     margin-bottom: 20px;
   }
 
-  @media (max-width: 900px) {
+  @media (max-width: 1150px) {
     .detail-grid { grid-template-columns: 1fr; }
   }
 
@@ -2080,6 +2080,15 @@
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  .detail-card-title .title-total {
+    margin-left: auto;
+    font-size: 11px;
+    font-weight: 900;
+    color: rgba(141,226,222,0.90);
+    text-align: right;
+    white-space: nowrap;
   }
 
   .detail-stat-grid {
@@ -2193,6 +2202,90 @@
     }
     .revision-count-label,
     .revision-count-total {
+      font-size: 11px;
+    }
+  }
+
+  .content-format-summary {
+    margin-top: 0;
+  }
+
+  .content-format-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .content-format-title span:first-child {
+    font-size: 12px;
+    font-weight: 900;
+    color: rgba(255,255,255,0.82);
+  }
+
+  .content-format-title span:last-child {
+    font-size: 11px;
+    font-weight: 800;
+    color: rgba(141,226,222,0.86);
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .content-format-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .content-format-row {
+    display: grid;
+    grid-template-columns: minmax(100px, 128px) minmax(80px, 1fr) 72px;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .content-format-name {
+    font-size: 12px;
+    font-weight: 800;
+    color: rgba(255,255,255,0.82);
+    line-height: 1.25;
+  }
+
+  .content-format-track {
+    height: 10px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.10);
+    overflow: hidden;
+  }
+
+  .content-format-fill {
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #59BEBA, #8DE2DE);
+  }
+
+  .content-format-total {
+    color: #8DE2DE;
+    font-size: 12px;
+    font-weight: 900;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .content-format-empty {
+    font-size: 12px;
+    font-weight: 700;
+    color: rgba(255,255,255,0.54);
+  }
+
+  @media (max-width: 560px) {
+    .content-format-row {
+      grid-template-columns: 86px minmax(70px, 1fr) 58px;
+      gap: 8px;
+    }
+    .content-format-name,
+    .content-format-total {
       font-size: 11px;
     }
   }
@@ -2802,6 +2895,7 @@ function normalizeApiData(apiData) {
           return {
             date,
             projectName,
+            formatContent: String(entry.formatContent || '').trim(),
             jenisRevisi,
             type,
             revisionCount: Number(entry.revisionCount) || 0,
@@ -2831,6 +2925,7 @@ function normalizeApiData(apiData) {
             pct: Number(issue.pct) || 0,
           })).filter(issue => issue.name && issue.count > 0)
         : [],
+      contentFormats: getContentFormatSummary(item, entries),
       entries,
     };
   });
@@ -2975,6 +3070,70 @@ function getRevisionCountColor(count) {
   if (n <= 1) return '#59BEBA';
   if (n <= 2) return '#F59E0B';
   return '#FF5A4D';
+}
+
+function getContentFormatSummary(item, entries = []) {
+  if (Array.isArray(item?.contentFormats) && item.contentFormats.length) {
+    return item.contentFormats
+      .map(format => ({
+        name: String(format.name || '').trim(),
+        count: Number(format.count) || 0,
+      }))
+      .filter(format => format.name && format.count > 0)
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  }
+
+  const counts = new Map();
+  entries.forEach(entry => {
+    const name = String(entry.formatContent || '').trim();
+    if (!name) return;
+    counts.set(name, (counts.get(name) || 0) + 1);
+  });
+
+  return Array.from(counts.entries())
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
+function renderContentFormatSummary(data, options = {}) {
+  const formats = Array.isArray(data?.contentFormats) ? data.contentFormats : [];
+  const total = formats.reduce((sum, item) => sum + (Number(item.count) || 0), 0);
+  const maxCount = formats.length ? Math.max(...formats.map(item => Number(item.count) || 0)) : 0;
+  const title = options.title || 'Jenis Konten yang Dikerjakan';
+  const emptyText = options.emptyText || 'Belum ada format content pada periode ini.';
+
+  return `
+    <div class="content-format-summary">
+      ${options.hideHeader ? '' : `
+      <div class="content-format-title">
+        <span>${title}</span>
+        <span>${total ? `${total} konten` : 'Belum ada data'}</span>
+      </div>
+      `}
+      ${formats.length ? `
+        <div class="content-format-list">
+          ${formats.map(item => {
+            const count = Number(item.count) || 0;
+            const width = maxCount > 0 ? Math.max(8, Math.round(count / maxCount * 100)) : 0;
+            return `
+              <div class="content-format-row">
+                <div class="content-format-name">${item.name}</div>
+                <div class="content-format-track">
+                  <div class="content-format-fill" style="width:${width}%"></div>
+                </div>
+                <div class="content-format-total">${count} konten</div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      ` : `<div class="content-format-empty">${emptyText}</div>`}
+    </div>
+  `;
+}
+
+function getContentFormatTotal(data) {
+  const formats = Array.isArray(data?.contentFormats) ? data.contentFormats : [];
+  return formats.reduce((sum, item) => sum + (Number(item.count) || 0), 0);
 }
 
 function getRevisionCountDistribution(data) {
@@ -4150,6 +4309,14 @@ function showDetail(name, options = {}) {
           </div>
         </div>
         ${renderRevisionCountDistribution(data)}
+      </div>
+
+      <div class="detail-card">
+        <div class="detail-card-title">
+          🧩 Jenis Konten yang Dikerjakan
+          <span class="title-total">${getContentFormatTotal(data) ? `${getContentFormatTotal(data)} konten` : 'Belum ada data'}</span>
+        </div>
+        ${renderContentFormatSummary(data, { hideHeader: true })}
       </div>
 
       <div class="detail-card">
